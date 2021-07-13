@@ -208,6 +208,15 @@ export class AppStudioPlugin implements Plugin {
   }
 
   /**
+   * Provision teams app
+   * @returns {string} - Remote teams app id
+   */
+  public async provision(ctx: PluginContext): Promise<Result<string, FxError>> {
+    const remoteTeamsAppId = await this.appStudioPluginImpl.provision(ctx);
+    return ok(remoteTeamsAppId);
+  }
+
+  /**
    * Build Teams Package
    * @param {string} appDirectory - The directory contains manifest.source.json and two images
    * @returns {string} - Path of built appPackage.zip

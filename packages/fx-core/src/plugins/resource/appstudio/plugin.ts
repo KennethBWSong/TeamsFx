@@ -65,7 +65,20 @@ import AdmZip from "adm-zip";
 import * as fs from "fs-extra";
 
 export class AppStudioPluginImpl {
-  public async updateApp(
+  public async provision(ctx: PluginContext): Promise<string> {
+    if (!remoteTeamsAppId) {
+      AppStudioClient.createApp();
+    } else {
+      const teamsApp = await AppStudioClient.getApp();
+      if (!teamsApp) {
+        AppStudioClient.createApp();
+      }
+    }
+    const teamsAppId = appDef?.teamsAppId;
+    return teamsAppId;
+  }
+
+  public async updateTeamsApp(
     appDefinition: IAppDefinition,
     appStudioToken: string,
     type: "localDebug" | "remote",
@@ -173,7 +186,8 @@ export class AppStudioPluginImpl {
    * @returns
    */
   public async createManifest(settings: ProjectSettings): Promise<TeamsAppManifest | undefined> {
-    const solutionSettings: AzureSolutionSettings = settings.solutionSettings as AzureSolutionSettings;
+    const solutionSettings: AzureSolutionSettings =
+      settings.solutionSettings as AzureSolutionSettings;
     if (
       !solutionSettings.capabilities ||
       (!solutionSettings.capabilities.includes(BotOptionItem.id) &&
@@ -367,14 +381,8 @@ export class AppStudioPluginImpl {
       return err(maybeConfig.error);
     }
 
-    const {
-      tabEndpoint,
-      tabDomain,
-      aadId,
-      botDomain,
-      botId,
-      webApplicationInfoResource,
-    } = maybeConfig.value;
+    const { tabEndpoint, tabDomain, aadId, botDomain, botId, webApplicationInfoResource } =
+      maybeConfig.value;
 
     const validDomains: string[] = [];
 
