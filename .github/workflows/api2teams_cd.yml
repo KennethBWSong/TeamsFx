@@ -1,0 +1,53 @@
+name: Publish api2teams
+
+on:
+  workflow_dispatch
+
+jobs:
+  cd:
+    runs-on: ubuntu-latest
+    env:
+      CI: true
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.CD_PAT }}
+          ref: ${{ github.ref }}
+
+      - name: Setup node
+        uses: actions/setup-node@v3
+        with:
+          node-version: 14
+
+      - name: Setup npm registry
+        run: |
+          echo "${{ secrets.NPMRC }}" > ~/.npmrc
+
+      - name: manage pkgs to release
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.pkgs }}
+        run: bash .github/scripts/lerna.sh ${{github.event.inputs.pkgs}}
+
+      - name: Setup project
+        run: |
+          npm run setup
+        env:
+          REQUEST_TOKEN: ${{ secrets.CD_PAT }}
+
+      - name: Setup git
+        run: |
+          git config --global user.name 'Bowen Song'
+          git config --global user.email 'bowsong@microsoft.com'
+
+      - name: release alpha npm packages to npmjs.org
+        run: |
+          npx lerna version prerelease --preid=alpha.$(git rev-parse --short HEAD) --exact --no-push --allow-branch ${GITHUB_REF#refs/*/} --yes
+
+      - name: publish alpha release to npm org
+        working-directory: 
+          packages/api2teams
+        run: |
+          npm publish --access public
+        env:
+          TEMPLATE_PATH: ${{ runner.temp }}/teamsfx_templates_v3
