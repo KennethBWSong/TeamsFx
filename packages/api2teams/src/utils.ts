@@ -9,6 +9,8 @@ export function getVersion(): string {
   return pkgContent.version;
 }
 
+
+
 export async function isFolderEmpty(folderPath: string): Promise<boolean> {
   const files = await fs.readdir(folderPath);
   return files.length === 0;
