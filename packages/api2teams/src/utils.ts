@@ -14,6 +14,7 @@ export async function isFolderEmpty(folderPath: string): Promise<boolean> {
   return files.length === 0;
 }
 
+
 export function getSafeCardName(
   api: OpenAPIV3.OperationObject,
   url: string,
