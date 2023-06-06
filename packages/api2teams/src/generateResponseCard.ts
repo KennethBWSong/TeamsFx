@@ -11,12 +11,10 @@ import tableElement from './resources/tableElement.json';
 export async function generateResponseCard(
   apis: OpenAPIV3.Document
 ): Promise<AdaptiveCardResult[]> {
-  console.log('Generate adaptive cards');
   const result: AdaptiveCardResult[] = [];
   for (const url in apis.paths) {
     for (const operation in apis.paths[url]) {
       if (operation === 'get') {
-        console.log(`API: ${operation} ${url}`);
         try {
           const card = parseResponse(
             apis.paths[url]![operation]!,
@@ -24,7 +22,6 @@ export async function generateResponseCard(
             operation
           );
           result.push(card);
-          console.log(`\tsuccessfully generated response card for this api\n`);
         } catch (error) {
           console.error(
             `\tfailed to generate response card for ${operation} ${url} due to error: ${(
@@ -46,22 +43,28 @@ function parseResponse(
 ): AdaptiveCardResult {
   const jsonResult = getResponseJsonResult(api);
 
-  let cardBody;
+  let cardBody = [];
 
   if (jsonResult.schema) {
     cardBody = generateCardFromResponse(
       jsonResult.schema as OpenAPIV3.SchemaObject,
       ''
     );
-  } else if (jsonResult.examples) {
+  }
+
+  // if no schema, try to use example value
+  if (cardBody.length === 0 && (jsonResult.examples || jsonResult.example)) {
     cardBody = [
       {
         type: 'TextBlock',
-        text: '${$root}',
+        text: '${jsonStringify($root)}',
         wrap: true
       }
     ];
-  } else {
+  }
+
+  // if no example value, use default sucess response
+  if (!cardBody) {
     cardBody = [
       {
         type: 'TextBlock',
@@ -86,7 +89,8 @@ function parseResponse(
     content: card,
     url,
     operation,
-    isArray: (jsonResult.schema as OpenAPIV3.SchemaObject)?.type === 'array'
+    isArray: (jsonResult.schema as OpenAPIV3.SchemaObject)?.type === 'array',
+    api
   };
 }
 
@@ -97,6 +101,19 @@ function generateCardFromResponse(
   parentName = ''
 ): any {
   if (schema.type === 'array') {
+    // schema.items can be arbitrary object
+    if (Object.keys(schema.items).length === 0) {
+      return [
+        {
+          type: 'TextBlock',
+          text: name
+            ? `${name}: \${jsonStringify(${name})}`
+            : 'result: ${jsonStringify($root)}',
+          wrap: true
+        }
+      ];
+    }
+
     const obj = generateCardFromResponse(
       schema.items as OpenAPIV3.SchemaObject,
       '',
@@ -165,6 +182,7 @@ function generateCardFromResponse(
       }
     ];
   }
+
   if (schema.allOf) {
     const result = [];
     for (let i = 0; i < schema.allOf.length; i++) {

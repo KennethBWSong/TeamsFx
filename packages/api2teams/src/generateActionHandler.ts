@@ -1,19 +1,19 @@
 import * as fs from 'fs-extra';
-import { capitalizeFirstLetter } from './utils';
-import { ActionHandlerResult } from './interfaces';
+import { capitalizeFirstLetter, getSafeName } from './utils';
+import { CodeResult } from './interfaces';
 
 export async function generateActionHandler(
   tag: string,
   responseCardName: string,
   cardId: string
-): Promise<ActionHandlerResult> {
+): Promise<CodeResult> {
   const codeTemplate = await fs.readFile(
-    './src/resources/actionHandlerTemplate.txt',
+    __dirname + '/resources/actionHandlerTemplate.txt',
     'utf8'
   );
 
   const result = codeTemplate
-    .replace(/{{tag}}/g, capitalizeFirstLetter(tag))
+    .replace(/{{tag}}/g, capitalizeFirstLetter(getSafeName(tag)))
     .replace(/{{cardName}}/g, responseCardName)
     .replace(/{{id}}/g, cardId)
     .replace(/{{className}}/g, capitalizeFirstLetter(cardId) + 'ActionHandler');

@@ -1,83 +1,61 @@
 import fs from 'fs-extra';
-import {
-  ActionHandlerResult,
-  CliOptions,
-  ResponseObjectResult
-} from './interfaces';
-import {
-  isFolderEmpty,
-  getResponseJsonResult,
-  componentRefToName,
-  formatCode,
-  capitalizeFirstLetter
-} from './utils';
-import SwaggerParser from '@apidevtools/swagger-parser';
-import { generateRequestCard } from './generateRequestCard';
-import { OpenAPIV3 } from 'openapi-types';
-import { AdaptiveCardResult } from './interfaces';
 import path from 'path';
+import SwaggerParser from '@apidevtools/swagger-parser';
+import { OpenAPIV3 } from 'openapi-types';
+import { CliOptions, CodeResult, AdaptiveCardResult } from './interfaces';
+import { formatCode, getSchemaRef, componentRefToCardName } from './utils';
+import { generateRequestCard } from './generateRequestCard';
 import { generateResponseCard } from './generateResponseCard';
-import { generateResponseObject } from './generateResponseObject';
 import { generateActionHandler } from './generateActionHandler';
+import { generateCommandHandler } from './generateCommandHandler';
+import { generateIndexFile } from './generateIndexFile';
+import { generateApi } from './generateApi';
+import { generateCommandIntellisenses } from './generateCommandIntellisenses';
 
 export async function parseApi(yaml: string, options: CliOptions) {
-  if (!(await isArgsValid(yaml, options))) {
-    return;
-  }
-
-  console.log(`yaml file path is: ${yaml}`);
-  console.log(`output folder is: ${options.output}`);
-
   try {
-    if (fs.existsSync(options.output)) {
-      console.log(
-        'output folder already existed, and will override this folder'
+    if (await fs.pathExists(options.output)) {
+      console.warn(
+        '[WARNING] output folder already existed, and will override this folder'
       );
+
+      await fs.rm(path.join(options.output, 'src'), {
+        recursive: true,
+        force: true
+      });
     } else {
       const output = options.output;
-      fs.mkdirSync(output, { recursive: true });
+      await fs.mkdir(output, { recursive: true });
     }
   } catch (e) {
     console.error(
-      `Cannot create output folder with error: ${(e as Error).message}`
+      `[ERROR] Cannot create output folder with error: ${(e as Error).message}`
     );
     throw e;
   }
+
+  console.log('start analyze swagger files');
+  console.log(` > input yaml file path: ${yaml}`);
+  console.log(` > output folder: ${options.output}`);
 
   const unResolvedApi = (await SwaggerParser.parse(yaml)) as OpenAPIV3.Document;
   const apis = (await SwaggerParser.validate(yaml)) as OpenAPIV3.Document;
 
   console.log(
-    'yaml file information: API name: %s, Version: %s',
+    ' > yaml file information: API name: %s, Version: %s',
     apis.info.title,
     apis.info.version
   );
 
-  const apiResponseToSchemaRef = new Map<string, string>();
-  for (const url in apis.paths) {
-    for (const operation in apis.paths[url]) {
-      if (operation === 'get') {
-        const schema = getResponseJsonResult(unResolvedApi.paths[url]!.get!)
-          .schema as any;
-        if (schema) {
-          if (schema.type === 'array') {
-            apiResponseToSchemaRef.set(url, schema.items.$ref);
-          } else if (schema.$ref) {
-            apiResponseToSchemaRef.set(url, schema.$ref);
-          }
-        }
-      }
-    }
-  }
-
-  console.log('start analyze swagger files\n');
-
+  console.log('analyze requests');
   const requestCards: AdaptiveCardResult[] = await generateRequestCard(apis);
-  const responseCards: AdaptiveCardResult[] = await generateResponseCard(apis);
-  const sampleResponse: ResponseObjectResult[] = await generateResponseObject(
-    apis
-  );
+  console.log(' > analyze successfully');
 
+  console.log('analyze responses');
+  const responseCards: AdaptiveCardResult[] = await generateResponseCard(apis);
+  console.log(' > analyze successfully');
+
+  console.log('generate request cards');
   for (const card of requestCards) {
     const cardPath = path.join(
       options.output,
@@ -85,13 +63,15 @@ export async function parseApi(yaml: string, options: CliOptions) {
       `${card.name}.json`
     );
     await fs.outputJSON(cardPath, card.content, { spaces: 2 });
+    console.log(` > generate ${card.name} successfully!`);
   }
 
+  console.log('generate response cards');
+  const schemaRefMap = getSchemaRef(unResolvedApi);
   for (const card of responseCards) {
-    if (apiResponseToSchemaRef.has(card.url)) {
-      const ref = apiResponseToSchemaRef.get(card.url);
-      card.name =
-        componentRefToName(ref!) + (card.isArray ? 'List' : '') + 'Card';
+    if (schemaRefMap.has(card.url)) {
+      const ref = schemaRefMap.get(card.url);
+      card.name = componentRefToCardName(ref!, card.isArray);
     }
     const cardPath = path.join(
       options.output,
@@ -99,10 +79,18 @@ export async function parseApi(yaml: string, options: CliOptions) {
       `${card.name}.json`
     );
     await fs.outputJson(cardPath, card.content, { spaces: 2 });
+    console.log(` > generate ${card.name} successfully!`);
   }
 
+  console.log('generate help command card');
+  await fs.copy(
+    __dirname + '/resources/helpCard.json',
+    options.output + '/src/adaptiveCards/helpCard.json'
+  );
+
+  console.log('generate action cards');
   for (const card of responseCards) {
-    const cardActionHandler: ActionHandlerResult = await generateActionHandler(
+    const cardActionHandler: CodeResult = await generateActionHandler(
       card.tag,
       card.name,
       card.id
@@ -115,85 +103,77 @@ export async function parseApi(yaml: string, options: CliOptions) {
     );
 
     await fs.outputFile(cardActionHandlerPath, cardActionHandler.code);
+    console.log(` > generate ${cardActionHandler.name} successfully!`);
   }
 
-  const apiFunctionsByTag: Record<string, string[]> = {};
-  const emptyFunctionsByTag: Record<string, string[]> = {};
-  for (const sampleJsonResult of sampleResponse) {
-    const jsonString = JSON.stringify(sampleJsonResult.content, null, 2);
-    const tag = sampleJsonResult.tag;
-    const apiFuncTemplate = fs.readFileSync(
-      path.join(__dirname, './resources/apiFuncTemplate.txt'),
-      'utf-8'
+  console.log('generate command handlers');
+  for (const card of responseCards) {
+    const commandHandler: CodeResult = await generateCommandHandler(
+      card.api,
+      card.name,
+      card.id,
+      card.url,
+      card.tag
     );
-    const mockApiFunction = apiFuncTemplate
-      .replace('{{functionName}}', sampleJsonResult.name)
-      .replace('{{returnJsonObject}}', `return ${jsonString};`);
-    const emptyApiFunction = apiFuncTemplate
-      .replace('{{functionName}}', sampleJsonResult.name)
-      .replace('{{returnJsonObject}}', '');
-    if (!apiFunctionsByTag[tag]) {
-      apiFunctionsByTag[tag] = [];
-    }
-    apiFunctionsByTag[tag].push(mockApiFunction);
 
-    if (!emptyFunctionsByTag[tag]) {
-      emptyFunctionsByTag[tag] = [];
-    }
-    emptyFunctionsByTag[tag].push(emptyApiFunction);
-  }
-
-  let realApiProviderCode =
-    '// Update this code to call real backend service\n';
-  let mockApiProviderCode = '';
-  for (const tag in apiFunctionsByTag) {
-    const apiClassTemplate = fs.readFileSync(
-      path.join(__dirname, './resources/apiClassTemplate.txt'),
-      'utf-8'
+    const cardActionHandlerPath = path.join(
+      options.output,
+      'src/commands',
+      `${commandHandler.name}.ts`
     );
-    const mockApiClass = apiClassTemplate
-      .replace('{{className}}', capitalizeFirstLetter(tag) + 'Api')
-      .replace('{{apiList}}', apiFunctionsByTag[tag].join('\n'));
 
-    const realApiClass = apiClassTemplate
-      .replace('{{className}}', capitalizeFirstLetter(tag) + 'Api')
-      .replace('{{apiList}}', emptyFunctionsByTag[tag].join('\n'));
-    mockApiProviderCode += mockApiClass + '\n';
-    realApiProviderCode += realApiClass + '\n';
+    await fs.outputFile(cardActionHandlerPath, commandHandler.code);
+    console.log(` > generate ${commandHandler.name} successfully!`);
   }
 
-  fs.outputFileSync(
-    path.join(options.output, 'src/apis', 'mockApiProvider.ts'),
-    formatCode(mockApiProviderCode),
-    'utf-8'
+  console.log('generate help command handler');
+  await fs.copy(
+    __dirname + '/resources/helpCommandHandler.txt',
+    options.output + '/src/commands/helpCommandHandler.ts'
   );
 
-  fs.outputFileSync(
-    path.join(options.output, 'src/apis', 'realApiProvider.ts'),
-    formatCode(realApiProviderCode),
-    'utf-8'
+  console.log('generate apis');
+  const apiProviders = await generateApi(apis);
+  for (const apiProviderResult of apiProviders) {
+    const apiProviderPath = path.join(
+      options.output,
+      'src/apis',
+      `${apiProviderResult.name}.ts`
+    );
+    await fs.outputFile(
+      apiProviderPath,
+      formatCode(apiProviderResult.code),
+      'utf-8'
+    );
+
+    console.log(` > generate ${apiProviderResult.name} successfully!`);
+  }
+
+  console.log('generate index file');
+  const indexFile = await generateIndexFile(responseCards);
+  const indexFilePath = path.join(
+    options.output,
+    'src',
+    `${indexFile.name}.ts`
   );
-}
+  await fs.outputFile(indexFilePath, formatCode(indexFile.code), 'utf-8');
+  console.log(` > generate ${indexFile.name} successfully!`);
 
-async function isArgsValid(
-  yaml: string,
-  options: CliOptions
-): Promise<boolean> {
-  if (!fs.existsSync(yaml)) {
-    console.error('yaml file path is not exist in the path: ' + yaml);
-    return false;
-  }
+  console.log('copy project template');
+  const resourcePath = path.join(__dirname, './resources/project-template');
+  await fs.copy(resourcePath, options.output);
+  console.log(` > copy template successfully!`);
 
-  if (await fs.pathExists(options.output)) {
-    const isOutputEmpty = await isFolderEmpty(options.output);
+  console.log('update manifest file');
+  const intellisenses = await generateCommandIntellisenses(requestCards);
+  const teamsAppMainifestPath = path.join(
+    options.output,
+    '/appPackage/manifest.json'
+  );
+  const manifestJson = await fs.readJSON(teamsAppMainifestPath, 'utf8');
+  manifestJson.bots[0].commandLists[0].commands = intellisenses;
+  await fs.outputJSON(teamsAppMainifestPath, manifestJson, { spaces: 2 });
+  console.log(` > update manifest successfully!`);
 
-    if (!options.force && !isOutputEmpty) {
-      console.error(
-        'output folder is not empty, and you can use -f parameter to overwrite output folder'
-      );
-      return false;
-    }
-  }
-
-  return true;
+  console.log('generate code successfully!');
 }
